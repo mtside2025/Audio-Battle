@@ -1,24 +1,88 @@
-"""Audio Battle Phase 1-3 prototype.
+"""Audio Battle, phases 1-6.
 
-Phase 1: Keyboard input
-Phase 2: Sound effect playback
-Phase 3: Left/right stereo audio cues
+The visual display is only a debugging aid.  All important combat events also
+produce a directional sound or an announcement, so the game can be played
+with a keyboard and headphones alone.
 """
 
 from __future__ import annotations
 
 import math
+import random
 import struct
 import threading
 import time
 from collections import deque
 from dataclasses import dataclass
+from enum import Enum
 
 import pygame
 
 from audio_core import stereo_gains
 
 SAMPLE_RATE = 44_100
+REACTION_TIME = 1.0
+PERFECT_DODGE_WINDOW = 0.20
+ENEMY_ATTACK_INTERVAL = (1.5, 3.0)
+RECOVERY_TIME = 2.0
+PLAYER_MAX_HP = 100
+ENEMY_MAX_HP = 100
+NORMAL_ATTACK_DAMAGE = 10
+HEAVY_ATTACK_DAMAGE = 25
+ENEMY_ATTACK_DAMAGE = 20
+HEAVY_ATTACK_COOLDOWN = 2.0
+
+
+class GameState(Enum):
+    MENU = "MENU"
+    PLAYING = "PLAYING"
+    WARNING = "WARNING"
+    ATTACKING = "ATTACKING"
+    ENEMY_RECOVERY = "ENEMY_RECOVERY"
+    VICTORY = "VICTORY"
+    GAME_OVER = "GAME_OVER"
+
+
+class EnemyState(Enum):
+    IDLE = "IDLE"
+    WARNING = "WARNING"
+    ATTACKING = "ATTACKING"
+    RECOVERY = "RECOVERY"
+    DEAD = "DEAD"
+
+
+@dataclass
+class Player:
+    hp: int = PLAYER_MAX_HP
+
+    def take_damage(self, amount: int) -> int:
+        self.hp = max(0, self.hp - amount)
+        return self.hp
+
+    def reset(self) -> None:
+        self.hp = PLAYER_MAX_HP
+
+
+@dataclass
+class Enemy:
+    hp: int = ENEMY_MAX_HP
+    state: EnemyState = EnemyState.IDLE
+    direction: str | None = None
+    state_started: float = 0.0
+    next_attack: float = 0.0
+
+    def take_damage(self, amount: int) -> int:
+        self.hp = max(0, self.hp - amount)
+        if self.hp == 0:
+            self.state = EnemyState.DEAD
+        return self.hp
+
+    def reset(self, now: float) -> None:
+        self.hp = ENEMY_MAX_HP
+        self.state = EnemyState.IDLE
+        self.direction = None
+        self.state_started = now
+        self.next_attack = now + random.uniform(*ENEMY_ATTACK_INTERVAL)
 
 
 class Narrator:
@@ -48,10 +112,8 @@ class Narrator:
 
     def _speak_loop(self) -> None:
         while self._running:
-            message = None
             with self._lock:
-                if self._queue:
-                    message = self._queue.popleft()
+                message = self._queue.popleft() if self._queue else None
             if message is None:
                 time.sleep(0.02)
                 continue
@@ -74,75 +136,50 @@ class ToneDef:
     volume: float
 
 
-def make_tone(tone: ToneDef, pan: float) -> pygame.mixer.Sound:
-    """Create a pygame Sound from a synthesized 16-bit stereo PCM tone."""
-    return pygame.mixer.Sound(buffer=synthesize_tone_bytes(tone, pan))
-
-
-def synthesize_tone_bytes(tone: ToneDef, pan: float, sample_rate: int = SAMPLE_RATE) -> bytes:
-    """Return little-endian signed 16-bit stereo PCM bytes for the given tone.
-
-    `pan` is expected in [-1.0, 1.0] and is clamped by stereo_gains.
-    `tone.volume` is expected in [0.0, 1.0].
-    `sample_rate` must be a positive integer.
-    Frame count uses int(duration * sample_rate), truncating fractional frames.
-    """
+def synthesize_tone_bytes(
+    tone: ToneDef, pan: float, sample_rate: int = SAMPLE_RATE
+) -> bytes:
     if sample_rate <= 0:
         raise ValueError("sample_rate must be positive.")
     left_gain, right_gain = stereo_gains(pan)
     frames = int((tone.duration_ms / 1000.0) * sample_rate)
     samples = bytearray(frames * 4)
-
     for i in range(frames):
-        t = i / sample_rate
-        base = math.sin(2.0 * math.pi * tone.frequency * t)
+        base = math.sin(2.0 * math.pi * tone.frequency * i / sample_rate)
         amp = int(32767 * tone.volume * base)
-        left = max(-32768, min(32767, int(amp * left_gain)))
-        right = max(-32768, min(32767, int(amp * right_gain)))
-        struct.pack_into("<hh", samples, i * 4, left, right)
-
+        struct.pack_into(
+            "<hh",
+            samples,
+            i * 4,
+            max(-32768, min(32767, int(amp * left_gain))),
+            max(-32768, min(32767, int(amp * right_gain))),
+        )
     return bytes(samples)
 
 
+def make_tone(tone: ToneDef, pan: float) -> pygame.mixer.Sound:
+    return pygame.mixer.Sound(buffer=synthesize_tone_bytes(tone, pan))
+
+
 class AudioBattlePhase13:
+    """Compatibility name retained for the original Phase 1-3 entry point."""
+
     def __init__(self) -> None:
         self._init_pygame()
-        current_mixer = pygame.mixer.get_init()
-        needs_mixer_init = not bool(current_mixer)
-        if current_mixer:
-            current_frequency, _current_format, current_channels = current_mixer
-            if current_frequency != SAMPLE_RATE or current_channels != 2:
-                pygame.mixer.quit()
-                needs_mixer_init = True
-        try:
-            if needs_mixer_init or not pygame.mixer.get_init():
-                pygame.mixer.init(frequency=SAMPLE_RATE, size=-16, channels=2)
-        except pygame.error as exc:
-            pygame.quit()
-            raise RuntimeError(f"Audio device initialization failed: {exc}") from exc
-        self.screen = pygame.display.set_mode((640, 240))
-        pygame.display.set_caption("Audio Battle - Phase 1-3")
+        if not pygame.mixer.get_init():
+            pygame.mixer.init(frequency=SAMPLE_RATE, size=-16, channels=2)
+        self.screen = pygame.display.set_mode((700, 360))
+        pygame.display.set_caption("Audio Battle - Phase 4-6")
         self.clock = pygame.time.Clock()
-        self.font = pygame.font.SysFont(None, 28)
+        self.font = pygame.font.SysFont(None, 26)
         self.narrator = Narrator()
         self.voice_enabled = self.narrator.available
-
-        self.enemy_tone = ToneDef(660.0, 220, 0.45)
-        self.dodge_tone = ToneDef(420.0, 160, 0.45)
-        self.attack_tone = ToneDef(300.0, 180, 0.5)
-        self.info_tone = ToneDef(520.0, 100, 0.4)
-        self.warning_tone = ToneDef(220.0, 160, 0.55)
-        self.enemy_sounds = {
-            "left": make_tone(self.enemy_tone, -1.0),
-            "right": make_tone(self.enemy_tone, 1.0),
-        }
-        self.dodge_sounds = {
-            "left": make_tone(self.dodge_tone, -1.0),
-            "right": make_tone(self.dodge_tone, 1.0),
-        }
-        self.attack_sound = make_tone(self.attack_tone, 0.0)
-        self.info_sound = make_tone(self.info_tone, 0.0)
-        self.warning_sound = make_tone(self.warning_tone, 0.0)
+        self.player = Player()
+        self.enemy = Enemy()
+        self.state = GameState.MENU
+        self.attack_action: str | None = None
+        self.heavy_ready_at = 0.0
+        self._build_sounds()
 
     @staticmethod
     def _init_pygame() -> None:
@@ -152,90 +189,187 @@ class AudioBattlePhase13:
             pygame.display.init()
         if not pygame.font.get_init():
             pygame.font.init()
-        if not pygame.display.get_init() or not pygame.font.get_init():
-            pygame.quit()
-            raise RuntimeError("Display or font initialization failed.")
+
+    def _build_sounds(self) -> None:
+        tones = {
+            "enemy": ToneDef(660, 220, 0.45),
+            "dodge": ToneDef(420, 160, 0.45),
+            "attack": ToneDef(300, 180, 0.5),
+            "warning": ToneDef(220, 160, 0.55),
+            "success": ToneDef(760, 140, 0.5),
+            "damage": ToneDef(120, 220, 0.55),
+            "low_hp": ToneDef(90, 400, 0.5),
+        }
+        self.sounds = {
+            "enemy_left": make_tone(tones["enemy"], -1),
+            "enemy_right": make_tone(tones["enemy"], 1),
+            "warning_left": make_tone(tones["warning"], -1),
+            "warning_right": make_tone(tones["warning"], 1),
+            "dodge": make_tone(tones["dodge"], 0),
+            "attack": make_tone(tones["attack"], 0),
+            "success": make_tone(tones["success"], 0),
+            "damage": make_tone(tones["damage"], 0),
+            "low_hp": make_tone(tones["low_hp"], 0),
+        }
+
+    def speak(self, text: str, important: bool = False) -> None:
+        if self.voice_enabled:
+            self.narrator.say(text)
+        else:
+            print(f"[TTS unavailable] {text}")
+            self.sounds["damage" if important else "success"].play()
 
     def announce_start(self) -> None:
         self.speak("Audio Battleへようこそ。", important=True)
         self.speak(
             "Enterでゲーム開始。左右矢印で敵方向音。AとDで回避。Jで攻撃。Hで説明。Escで終了。"
         )
-        if not self.voice_enabled:
-            print(
-                "音声読み上げが利用できません。代替としてイベントごとに通知音を再生します。"
-            )
 
-    def speak(self, text: str, important: bool = False) -> None:
-        if self.voice_enabled:
-            self.narrator.say(text)
-            return
-        print(f"[TTS unavailable] {text}")
-        if important:
-            self.warning_sound.play()
+    def announce_status(self) -> None:
+        print(f"Your HP: {self.player.hp}; Enemy HP: {self.enemy.hp}")
+        self.speak(f"Your HP: {self.player.hp}. Enemy HP: {self.enemy.hp}.")
+
+    def _hp_damage(self, amount: int) -> None:
+        self.player.take_damage(amount)
+        self.sounds["damage"].play()
+        if self.player.hp <= 20:
+            self.sounds["low_hp"].play()
+        if self.player.hp == 0:
+            self.state = GameState.GAME_OVER
+            self.speak("Game Over. Press Enter to restart. Press Escape to quit.", True)
+
+    def _begin_attack(self, now: float) -> None:
+        self.enemy.direction = random.choice(("left", "right"))
+        self.enemy.state = EnemyState.WARNING
+        self.enemy.state_started = now
+        self.attack_action = None
+        self.state = GameState.WARNING
+        direction = self.enemy.direction
+        self.sounds[f"warning_{direction}"].play()
+        self.speak(f"Enemy warning {direction}.")
+
+    def _resolve_attack(self) -> None:
+        direction = self.enemy.direction
+        if self.attack_action == "guard":
+            self.speak("Guard!")
+        elif self.attack_action == direction:
+            remaining = REACTION_TIME - (time.monotonic() - self.enemy.state_started)
+            if remaining <= PERFECT_DODGE_WINDOW:
+                self.sounds["success"].play()
+                self.speak("Perfect Dodge!")
+            else:
+                self.sounds["dodge"].play()
+                self.speak("Dodge!")
         else:
-            self.info_sound.play()
+            self._hp_damage(ENEMY_ATTACK_DAMAGE)
+            self.speak("Hit!")
+
+    def _update(self, now: float) -> None:
+        if self.state != GameState.PLAYING and self.state not in (
+            GameState.WARNING,
+            GameState.ATTACKING,
+            GameState.ENEMY_RECOVERY,
+        ):
+            return
+        if self.enemy.state == EnemyState.IDLE and now >= self.enemy.next_attack:
+            self._begin_attack(now)
+        elif self.enemy.state == EnemyState.WARNING and now - self.enemy.state_started >= REACTION_TIME:
+            self.enemy.state = EnemyState.ATTACKING
+            self.enemy.state_started = now
+            self.state = GameState.ATTACKING
+            self.sounds[f"enemy_{self.enemy.direction}"].play()
+            self.sounds["attack"].play()
+            self.speak("Attack!")
+            self._resolve_attack()
+        elif self.enemy.state == EnemyState.ATTACKING and now - self.enemy.state_started >= 0.25:
+            self.enemy.state = EnemyState.RECOVERY
+            self.enemy.state_started = now
+            self.state = GameState.ENEMY_RECOVERY
+        elif self.enemy.state == EnemyState.RECOVERY and now - self.enemy.state_started >= RECOVERY_TIME:
+            self.enemy.state = EnemyState.IDLE
+            self.enemy.next_attack = now + random.uniform(*ENEMY_ATTACK_INTERVAL)
+            self.state = GameState.PLAYING
+
+    def _player_attack(self, heavy: bool, now: float) -> None:
+        if self.enemy.state != EnemyState.RECOVERY or self.enemy.hp <= 0:
+            self.speak("Enemy is not vulnerable.")
+            return
+        if heavy and now < self.heavy_ready_at:
+            self.speak("Heavy attack cooling down.")
+            return
+        damage = HEAVY_ATTACK_DAMAGE if heavy else NORMAL_ATTACK_DAMAGE
+        if heavy:
+            self.heavy_ready_at = now + HEAVY_ATTACK_COOLDOWN
+        self.enemy.take_damage(damage)
+        self.sounds["attack"].play()
+        self.speak(f"{'Heavy attack' if heavy else 'Attack'}.")
+        if self.enemy.hp == 0:
+            self.state = GameState.VICTORY
+            self.speak("Enemy Defeated! Victory! Press Enter to play again.", True)
+
+    def _handle_key(self, event: pygame.event.Event, now: float) -> bool:
+        if event.key in (pygame.K_ESCAPE, pygame.K_q):
+            return False
+        if event.key == pygame.K_RETURN and self.state in (
+            GameState.MENU,
+            GameState.GAME_OVER,
+            GameState.VICTORY,
+        ):
+            self.player.reset()
+            self.enemy.reset(now)
+            self.state = GameState.PLAYING
+            self.speak("Game started.", True)
+        elif event.key == pygame.K_h:
+            self.announce_status()
+        elif self.state in (GameState.WARNING, GameState.ATTACKING):
+            if event.key == pygame.K_a:
+                self.attack_action = "left"
+            elif event.key == pygame.K_d:
+                self.attack_action = "right"
+            elif event.key == pygame.K_SPACE:
+                self.attack_action = "guard"
+        elif event.key == pygame.K_j:
+            self._player_attack(False, now)
+        elif event.key == pygame.K_k:
+            self._player_attack(True, now)
+        # Preserve the original Phase 1-3 directional demonstration.
+        elif event.key == pygame.K_LEFT:
+            self.sounds["enemy_left"].play()
+        elif event.key == pygame.K_RIGHT:
+            self.sounds["enemy_right"].play()
+        return True
 
     def draw_text(self) -> None:
+        def bar(value: int) -> str:
+            return "█" * (value // 10) + "░" * (10 - value // 10)
+
+        direction = self.enemy.direction or "-"
         lines = [
-            "Audio Battle Phase 1-3 Prototype",
-            "Enter: Start announcement",
-            "Left/Right: Enemy cue (stereo)",
-            "A/D: Dodge SFX (left/right)",
-            "J: Attack SFX (center)",
-            "H: Read controls",
-            "Esc or Q: Quit",
+            "Audio Battle",
+            f"Player HP: {bar(self.player.hp)} {self.player.hp}",
+            f"Enemy HP:  {bar(self.enemy.hp)} {self.enemy.hp}",
+            f"State: {self.state.value}  Enemy: {self.enemy.state.value}  Direction: {direction}",
+            "A/D = Dodge   SPACE = Guard   J = Attack   K = Heavy Attack",
+            "H = Status   ENTER = Start/Restart   ESC = Quit",
         ]
         self.screen.fill((10, 10, 15))
-        y = 20
-        for line in lines:
-            txt = self.font.render(line, True, (230, 230, 230))
-            self.screen.blit(txt, (20, y))
-            y += 28
+        for index, line in enumerate(lines):
+            self.screen.blit(self.font.render(line, True, (230, 230, 230)), (20, 20 + index * 48))
         pygame.display.flip()
-
-    def play_enemy_cue(self, direction: str) -> None:
-        self.enemy_sounds[direction].play()
-        direction_ja = "左" if direction == "left" else "右"
-        self.speak(f"敵の気配: {direction_ja}")
-
-    def play_dodge(self, direction: str) -> None:
-        self.dodge_sounds[direction].play()
-        direction_ja = "左" if direction == "left" else "右"
-        self.speak(f"回避: {direction_ja}")
-
-    def play_attack(self) -> None:
-        self.attack_sound.play()
-        self.speak("攻撃")
 
     def run(self) -> None:
         self.announce_start()
         running = True
         try:
             while running:
-                self.draw_text()
+                now = time.monotonic()
                 for event in pygame.event.get():
                     if event.type == pygame.QUIT:
                         running = False
                     elif event.type == pygame.KEYDOWN:
-                        if event.key in (pygame.K_ESCAPE, pygame.K_q):
-                            running = False
-                        elif event.key == pygame.K_RETURN:
-                            self.speak("ゲーム開始", important=True)
-                        elif event.key == pygame.K_LEFT:
-                            self.play_enemy_cue("left")
-                        elif event.key == pygame.K_RIGHT:
-                            self.play_enemy_cue("right")
-                        elif event.key == pygame.K_a:
-                            self.play_dodge("left")
-                        elif event.key == pygame.K_d:
-                            self.play_dodge("right")
-                        elif event.key == pygame.K_j:
-                            self.play_attack()
-                        elif event.key == pygame.K_h:
-                            self.speak(
-                                "操作説明。左矢印と右矢印で敵方向音。AとDで回避。Jで攻撃。"
-                            )
+                        running = self._handle_key(event, now)
+                self._update(now)
+                self.draw_text()
                 self.clock.tick(60)
         finally:
             self.narrator.stop()
@@ -243,8 +377,7 @@ class AudioBattlePhase13:
 
 
 def main() -> int:
-    app = AudioBattlePhase13()
-    app.run()
+    AudioBattlePhase13().run()
     return 0
 
 
