@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import math
 import struct
-import sys
 from dataclasses import dataclass
 
 import pygame
@@ -63,7 +62,11 @@ def make_tone(tone: ToneDef, pan: float) -> pygame.mixer.Sound:
 class AudioBattlePhase13:
     def __init__(self) -> None:
         pygame.init()
-        pygame.mixer.init(frequency=SAMPLE_RATE, size=-16, channels=2)
+        try:
+            pygame.mixer.init(frequency=SAMPLE_RATE, size=-16, channels=2)
+        except pygame.error as exc:
+            pygame.quit()
+            raise RuntimeError("Audio device initialization failed.") from exc
         self.screen = pygame.display.set_mode((640, 240))
         pygame.display.set_caption("Audio Battle - Phase 1-3")
         self.clock = pygame.time.Clock()
@@ -73,6 +76,15 @@ class AudioBattlePhase13:
         self.enemy_tone = ToneDef(660.0, 220, 0.45)
         self.dodge_tone = ToneDef(420.0, 160, 0.45)
         self.attack_tone = ToneDef(300.0, 180, 0.5)
+        self.enemy_sounds = {
+            "left": make_tone(self.enemy_tone, -1.0),
+            "right": make_tone(self.enemy_tone, 1.0),
+        }
+        self.dodge_sounds = {
+            "left": make_tone(self.dodge_tone, -1.0),
+            "right": make_tone(self.dodge_tone, 1.0),
+        }
+        self.attack_sound = make_tone(self.attack_tone, 0.0)
 
     def announce_start(self) -> None:
         self.narrator.say("Audio Battleへようこそ。")
@@ -97,19 +109,15 @@ class AudioBattlePhase13:
         pygame.display.flip()
 
     def play_enemy_cue(self, direction: str) -> None:
-        pan = -1.0 if direction == "left" else 1.0
-        cue = make_tone(self.enemy_tone, pan)
-        cue.play()
+        self.enemy_sounds[direction].play()
         self.narrator.say(f"敵の気配: {direction}")
 
     def play_dodge(self, direction: str) -> None:
-        pan = -1.0 if direction == "left" else 1.0
-        sfx = make_tone(self.dodge_tone, pan)
-        sfx.play()
+        self.dodge_sounds[direction].play()
         self.narrator.say(f"回避: {direction}")
 
     def play_attack(self) -> None:
-        make_tone(self.attack_tone, 0.0).play()
+        self.attack_sound.play()
         self.narrator.say("攻撃")
 
     def run(self) -> None:

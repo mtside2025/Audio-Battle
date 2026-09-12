@@ -4,13 +4,13 @@ Phase 1〜3（キーボード入力・効果音再生・左右ステレオ音）
 
 ## ファイル構成
 
-- `/home/runner/work/Audio-Battle/Audio-Battle/audio_battle.py`
+- `audio_battle.py`
   - ゲーム本体（Pygameループ、キー入力、SE再生、左右ステレオ再生）
-- `/home/runner/work/Audio-Battle/Audio-Battle/audio_core.py`
+- `audio_core.py`
   - ステレオ定位の計算ロジック
-- `/home/runner/work/Audio-Battle/Audio-Battle/tests/test_audio_core.py`
+- `tests/test_audio_core.py`
   - 定位計算の最小ユニットテスト
-- `/home/runner/work/Audio-Battle/Audio-Battle/requirements.txt`
+- `requirements.txt`
   - 実行依存
 
 ## 起動方法
@@ -19,14 +19,14 @@ Phase 1〜3（キーボード入力・効果音再生・左右ステレオ音）
 2. 依存をインストール
 
 ```bash
-cd /home/runner/work/Audio-Battle/Audio-Battle
+cd Audio-Battle
 python -m pip install -r requirements.txt
 ```
 
 3. 起動
 
 ```bash
-python /home/runner/work/Audio-Battle/Audio-Battle/audio_battle.py
+python audio_battle.py
 ```
 
 ## 操作
