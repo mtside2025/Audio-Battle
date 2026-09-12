@@ -219,6 +219,12 @@ class AudioBattlePhase13:
             print(f"[TTS unavailable] {text}")
             self.sounds["damage" if important else "success"].play()
 
+    def announce_start(self) -> None:
+        self.speak("Audio Battleへようこそ。", important=True)
+        self.speak(
+            "Enterでゲーム開始。左右矢印で敵方向音。AとDで回避。Jで攻撃。Hで説明。Escで終了。"
+        )
+
     def announce_status(self) -> None:
         print(f"Your HP: {self.player.hp}; Enemy HP: {self.enemy.hp}")
         self.speak(f"Your HP: {self.player.hp}. Enemy HP: {self.enemy.hp}.")
@@ -352,7 +358,7 @@ class AudioBattlePhase13:
         pygame.display.flip()
 
     def run(self) -> None:
-        self.speak("Audio Battle. Press Enter to start.", True)
+        self.announce_start()
         running = True
         try:
             while running:
