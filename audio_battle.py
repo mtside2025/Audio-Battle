@@ -60,8 +60,13 @@ class Narrator:
 
     def stop(self) -> None:
         self._running = False
+        if self._engine is not None:
+            try:
+                self._engine.stop()
+            except Exception:
+                pass
         if self._thread.is_alive():
-            self._thread.join(timeout=0.3)
+            self._thread.join()
 
 
 @dataclass(frozen=True)
@@ -95,7 +100,7 @@ class AudioBattlePhase13:
     def __init__(self) -> None:
         self._init_pygame()
         current_mixer = pygame.mixer.get_init()
-        if current_mixer and current_mixer != (SAMPLE_RATE, -16, 2):
+        if current_mixer and (current_mixer[0] != SAMPLE_RATE or current_mixer[2] != 2):
             pygame.mixer.quit()
         try:
             if not pygame.mixer.get_init():
@@ -125,6 +130,7 @@ class AudioBattlePhase13:
     @staticmethod
     def _init_pygame() -> None:
         pygame.mixer.pre_init(frequency=SAMPLE_RATE, size=-16, channels=2)
+        pygame.init()
         if not pygame.display.get_init():
             pygame.display.init()
         if not pygame.font.get_init():
