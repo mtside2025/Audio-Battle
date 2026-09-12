@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import math
 import struct
+import threading
+from collections import deque
 from dataclasses import dataclass
 
 import pygame
@@ -21,19 +23,44 @@ SAMPLE_RATE = 44_100
 class Narrator:
     def __init__(self) -> None:
         self._engine = None
+        self._queue: deque[str] = deque()
+        self._lock = threading.Lock()
+        self._running = True
         try:
             import pyttsx3  # type: ignore
 
             self._engine = pyttsx3.init()
         except Exception:
             self._engine = None
+        self._thread = threading.Thread(target=self._speak_loop, daemon=True)
+        self._thread.start()
 
     def say(self, text: str) -> None:
         print(text)
         if self._engine is None:
             return
-        self._engine.say(text)
-        self._engine.runAndWait()
+        with self._lock:
+            self._queue.append(text)
+
+    def _speak_loop(self) -> None:
+        while self._running:
+            message = None
+            with self._lock:
+                if self._queue:
+                    message = self._queue.popleft()
+            if message is None:
+                pygame.time.wait(20)
+                continue
+            try:
+                self._engine.say(message)
+                self._engine.runAndWait()
+            except Exception:
+                self._running = False
+
+    def stop(self) -> None:
+        self._running = False
+        if self._thread.is_alive():
+            self._thread.join(timeout=0.3)
 
 
 @dataclass(frozen=True)
@@ -44,24 +71,28 @@ class ToneDef:
 
 
 def make_tone(tone: ToneDef, pan: float) -> pygame.mixer.Sound:
+    return pygame.mixer.Sound(buffer=synthesize_tone_bytes(tone, pan))
+
+
+def synthesize_tone_bytes(tone: ToneDef, pan: float, sample_rate: int = SAMPLE_RATE) -> bytes:
     left_gain, right_gain = stereo_gains(pan)
-    frames = int((tone.duration_ms / 1000.0) * SAMPLE_RATE)
+    frames = int((tone.duration_ms / 1000.0) * sample_rate)
     samples = bytearray()
 
     for i in range(frames):
-        t = i / SAMPLE_RATE
+        t = i / sample_rate
         base = math.sin(2.0 * math.pi * tone.frequency * t)
         amp = int(32767 * tone.volume * base)
         left = int(amp * left_gain)
         right = int(amp * right_gain)
         samples.extend(struct.pack("<hh", left, right))
 
-    return pygame.mixer.Sound(buffer=bytes(samples))
+    return bytes(samples)
 
 
 class AudioBattlePhase13:
     def __init__(self) -> None:
-        pygame.init()
+        self._init_pygame()
         try:
             pygame.mixer.init(frequency=SAMPLE_RATE, size=-16, channels=2)
         except pygame.error as exc:
@@ -86,9 +117,21 @@ class AudioBattlePhase13:
         }
         self.attack_sound = make_tone(self.attack_tone, 0.0)
 
+    @staticmethod
+    def _init_pygame() -> None:
+        if not pygame.display.get_init():
+            pygame.display.init()
+        if not pygame.font.get_init():
+            pygame.font.init()
+        if not pygame.display.get_init() or not pygame.font.get_init():
+            pygame.quit()
+            raise RuntimeError("Display or font initialization failed.")
+
     def announce_start(self) -> None:
         self.narrator.say("Audio Battleへようこそ。")
-        self.narrator.say("Enterキーでゲーム開始。Escキーで終了。")
+        self.narrator.say(
+            "Enterでゲーム開始。左右矢印で敵方向音。AとDで回避。Jで攻撃。Hで説明。Escで終了。"
+        )
 
     def draw_text(self) -> None:
         lines = [
@@ -123,33 +166,35 @@ class AudioBattlePhase13:
     def run(self) -> None:
         self.announce_start()
         running = True
-        while running:
-            self.draw_text()
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    running = False
-                elif event.type == pygame.KEYDOWN:
-                    if event.key in (pygame.K_ESCAPE, pygame.K_q):
+        try:
+            while running:
+                self.draw_text()
+                for event in pygame.event.get():
+                    if event.type == pygame.QUIT:
                         running = False
-                    elif event.key == pygame.K_RETURN:
-                        self.narrator.say("ゲーム開始")
-                    elif event.key == pygame.K_LEFT:
-                        self.play_enemy_cue("left")
-                    elif event.key == pygame.K_RIGHT:
-                        self.play_enemy_cue("right")
-                    elif event.key == pygame.K_a:
-                        self.play_dodge("left")
-                    elif event.key == pygame.K_d:
-                        self.play_dodge("right")
-                    elif event.key == pygame.K_j:
-                        self.play_attack()
-                    elif event.key == pygame.K_h:
-                        self.narrator.say(
-                            "操作説明。左矢印と右矢印で敵方向音。AとDで回避。Jで攻撃。"
-                        )
-            self.clock.tick(60)
-
-        pygame.quit()
+                    elif event.type == pygame.KEYDOWN:
+                        if event.key in (pygame.K_ESCAPE, pygame.K_q):
+                            running = False
+                        elif event.key == pygame.K_RETURN:
+                            self.narrator.say("ゲーム開始")
+                        elif event.key == pygame.K_LEFT:
+                            self.play_enemy_cue("left")
+                        elif event.key == pygame.K_RIGHT:
+                            self.play_enemy_cue("right")
+                        elif event.key == pygame.K_a:
+                            self.play_dodge("left")
+                        elif event.key == pygame.K_d:
+                            self.play_dodge("right")
+                        elif event.key == pygame.K_j:
+                            self.play_attack()
+                        elif event.key == pygame.K_h:
+                            self.narrator.say(
+                                "操作説明。左矢印と右矢印で敵方向音。AとDで回避。Jで攻撃。"
+                            )
+                self.clock.tick(60)
+        finally:
+            self.narrator.stop()
+            pygame.quit()
 
 
 def main() -> int:
