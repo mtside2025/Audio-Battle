@@ -60,11 +60,6 @@ class Narrator:
 
     def stop(self) -> None:
         self._running = False
-        if self._engine is not None:
-            try:
-                self._engine.stop()
-            except Exception:
-                pass
         if self._thread.is_alive():
             self._thread.join(timeout=1.0)
 

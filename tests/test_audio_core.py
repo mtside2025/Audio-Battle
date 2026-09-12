@@ -55,6 +55,25 @@ class TestAudioCore(unittest.TestCase):
         self.assertGreater(rr, rl)
         self.assertAlmostEqual(cl / cr, 1.0, places=2)
 
+    def test_synthesize_tone_volume_scaling(self):
+        silent = ToneDef(frequency=440.0, duration_ms=100, volume=0.0)
+        quiet = ToneDef(frequency=440.0, duration_ms=100, volume=0.2)
+        loud = ToneDef(frequency=440.0, duration_ms=100, volume=0.8)
+
+        silent_data = synthesize_tone_bytes(silent, pan=0.0, sample_rate=4000)
+        quiet_data = synthesize_tone_bytes(quiet, pan=0.0, sample_rate=4000)
+        loud_data = synthesize_tone_bytes(loud, pan=0.0, sample_rate=4000)
+
+        def total_energy(raw: bytes) -> int:
+            total = 0
+            for i in range(0, len(raw), 4):
+                left, right = struct.unpack("<hh", raw[i : i + 4])
+                total += abs(left) + abs(right)
+            return total
+
+        self.assertEqual(total_energy(silent_data), 0)
+        self.assertGreater(total_energy(loud_data), total_energy(quiet_data))
+
 
 if __name__ == "__main__":
     unittest.main()
