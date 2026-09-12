@@ -27,14 +27,17 @@ class Narrator:
         self._queue: deque[str] = deque()
         self._lock = threading.Lock()
         self._running = True
+        self._thread: threading.Thread | None = None
         try:
             import pyttsx3  # type: ignore
 
             self._engine = pyttsx3.init()
         except Exception:
             self._engine = None
-        self._thread = threading.Thread(target=self._speak_loop, daemon=True)
-        self._thread.start()
+        self.available = self._engine is not None
+        if self._engine is not None:
+            self._thread = threading.Thread(target=self._speak_loop, daemon=True)
+            self._thread.start()
 
     def say(self, text: str) -> None:
         print(text)
@@ -60,7 +63,7 @@ class Narrator:
 
     def stop(self) -> None:
         self._running = False
-        if self._thread.is_alive():
+        if self._thread is not None and self._thread.is_alive():
             self._thread.join(timeout=1.0)
 
 
@@ -81,7 +84,11 @@ def synthesize_tone_bytes(tone: ToneDef, pan: float, sample_rate: int = SAMPLE_R
 
     `pan` is expected in [-1.0, 1.0] and is clamped by stereo_gains.
     `tone.volume` is expected in [0.0, 1.0].
+    `sample_rate` must be a positive integer.
+    Frame count uses int(duration * sample_rate), truncating fractional frames.
     """
+    if sample_rate <= 0:
+        raise ValueError("sample_rate must be positive.")
     left_gain, right_gain = stereo_gains(pan)
     frames = int((tone.duration_ms / 1000.0) * sample_rate)
     samples = bytearray(frames * 4)
@@ -102,24 +109,29 @@ class AudioBattlePhase13:
         self._init_pygame()
         current_mixer = pygame.mixer.get_init()
         needs_mixer_init = not bool(current_mixer)
-        if current_mixer and (current_mixer[0] != SAMPLE_RATE or current_mixer[2] != 2):
-            pygame.mixer.quit()
-            needs_mixer_init = True
+        if current_mixer:
+            current_frequency, _current_format, current_channels = current_mixer
+            if current_frequency != SAMPLE_RATE or current_channels != 2:
+                pygame.mixer.quit()
+                needs_mixer_init = True
         try:
             if needs_mixer_init or not pygame.mixer.get_init():
                 pygame.mixer.init(frequency=SAMPLE_RATE, size=-16, channels=2)
         except pygame.error as exc:
             pygame.quit()
-            raise RuntimeError("Audio device initialization failed.") from exc
+            raise RuntimeError(f"Audio device initialization failed: {exc}") from exc
         self.screen = pygame.display.set_mode((640, 240))
         pygame.display.set_caption("Audio Battle - Phase 1-3")
         self.clock = pygame.time.Clock()
         self.font = pygame.font.SysFont(None, 28)
         self.narrator = Narrator()
+        self.voice_enabled = self.narrator.available
 
         self.enemy_tone = ToneDef(660.0, 220, 0.45)
         self.dodge_tone = ToneDef(420.0, 160, 0.45)
         self.attack_tone = ToneDef(300.0, 180, 0.5)
+        self.info_tone = ToneDef(520.0, 100, 0.4)
+        self.warning_tone = ToneDef(220.0, 160, 0.55)
         self.enemy_sounds = {
             "left": make_tone(self.enemy_tone, -1.0),
             "right": make_tone(self.enemy_tone, 1.0),
@@ -129,6 +141,8 @@ class AudioBattlePhase13:
             "right": make_tone(self.dodge_tone, 1.0),
         }
         self.attack_sound = make_tone(self.attack_tone, 0.0)
+        self.info_sound = make_tone(self.info_tone, 0.0)
+        self.warning_sound = make_tone(self.warning_tone, 0.0)
 
     @staticmethod
     def _init_pygame() -> None:
@@ -143,10 +157,24 @@ class AudioBattlePhase13:
             raise RuntimeError("Display or font initialization failed.")
 
     def announce_start(self) -> None:
-        self.narrator.say("Audio Battleへようこそ。")
-        self.narrator.say(
+        self.speak("Audio Battleへようこそ。", important=True)
+        self.speak(
             "Enterでゲーム開始。左右矢印で敵方向音。AとDで回避。Jで攻撃。Hで説明。Escで終了。"
         )
+        if not self.voice_enabled:
+            print(
+                "音声読み上げが利用できません。代替としてイベントごとに通知音を再生します。"
+            )
+
+    def speak(self, text: str, important: bool = False) -> None:
+        if self.voice_enabled:
+            self.narrator.say(text)
+            return
+        print(f"[TTS unavailable] {text}")
+        if important:
+            self.warning_sound.play()
+        else:
+            self.info_sound.play()
 
     def draw_text(self) -> None:
         lines = [
@@ -169,16 +197,16 @@ class AudioBattlePhase13:
     def play_enemy_cue(self, direction: str) -> None:
         self.enemy_sounds[direction].play()
         direction_ja = "左" if direction == "left" else "右"
-        self.narrator.say(f"敵の気配: {direction_ja}")
+        self.speak(f"敵の気配: {direction_ja}")
 
     def play_dodge(self, direction: str) -> None:
         self.dodge_sounds[direction].play()
         direction_ja = "左" if direction == "left" else "右"
-        self.narrator.say(f"回避: {direction_ja}")
+        self.speak(f"回避: {direction_ja}")
 
     def play_attack(self) -> None:
         self.attack_sound.play()
-        self.narrator.say("攻撃")
+        self.speak("攻撃")
 
     def run(self) -> None:
         self.announce_start()
@@ -193,7 +221,7 @@ class AudioBattlePhase13:
                         if event.key in (pygame.K_ESCAPE, pygame.K_q):
                             running = False
                         elif event.key == pygame.K_RETURN:
-                            self.narrator.say("ゲーム開始")
+                            self.speak("ゲーム開始", important=True)
                         elif event.key == pygame.K_LEFT:
                             self.play_enemy_cue("left")
                         elif event.key == pygame.K_RIGHT:
@@ -205,7 +233,7 @@ class AudioBattlePhase13:
                         elif event.key == pygame.K_j:
                             self.play_attack()
                         elif event.key == pygame.K_h:
-                            self.narrator.say(
+                            self.speak(
                                 "操作説明。左矢印と右矢印で敵方向音。AとDで回避。Jで攻撃。"
                             )
                 self.clock.tick(60)

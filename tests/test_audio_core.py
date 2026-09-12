@@ -1,7 +1,8 @@
 import struct
 import unittest
+from unittest.mock import MagicMock
 
-from audio_battle import ToneDef, synthesize_tone_bytes
+from audio_battle import AudioBattlePhase13, ToneDef, synthesize_tone_bytes
 from audio_core import clamp_pan, stereo_gains
 
 
@@ -73,6 +74,20 @@ class TestAudioCore(unittest.TestCase):
 
         self.assertEqual(total_energy(silent_data), 0)
         self.assertGreater(total_energy(loud_data), total_energy(quiet_data))
+
+    def test_synthesize_tone_bytes_rejects_non_positive_sample_rate(self):
+        tone = ToneDef(frequency=440.0, duration_ms=100, volume=0.5)
+        with self.assertRaises(ValueError):
+            synthesize_tone_bytes(tone, pan=0.0, sample_rate=0)
+
+    def test_announce_start_speaks_controls(self):
+        app = AudioBattlePhase13.__new__(AudioBattlePhase13)
+        app.speak = MagicMock()
+        app.voice_enabled = True
+        app.announce_start()
+        calls = [c.args[0] for c in app.speak.call_args_list]
+        self.assertTrue(any("Audio Battleへようこそ" in c for c in calls))
+        self.assertTrue(any("左右矢印" in c and "AとD" in c and "Jで攻撃" in c for c in calls))
 
 
 if __name__ == "__main__":
