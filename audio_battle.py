@@ -77,10 +77,16 @@ class ToneDef:
 
 
 def make_tone(tone: ToneDef, pan: float) -> pygame.mixer.Sound:
+    """Create a pygame Sound from a synthesized 16-bit stereo PCM tone."""
     return pygame.mixer.Sound(buffer=synthesize_tone_bytes(tone, pan))
 
 
 def synthesize_tone_bytes(tone: ToneDef, pan: float, sample_rate: int = SAMPLE_RATE) -> bytes:
+    """Return little-endian signed 16-bit stereo PCM bytes for the given tone.
+
+    `pan` is expected in [-1.0, 1.0] and is clamped by stereo_gains.
+    `tone.volume` is expected in [0.0, 1.0].
+    """
     left_gain, right_gain = stereo_gains(pan)
     frames = int((tone.duration_ms / 1000.0) * sample_rate)
     samples = bytearray(frames * 4)
@@ -89,8 +95,8 @@ def synthesize_tone_bytes(tone: ToneDef, pan: float, sample_rate: int = SAMPLE_R
         t = i / sample_rate
         base = math.sin(2.0 * math.pi * tone.frequency * t)
         amp = int(32767 * tone.volume * base)
-        left = int(amp * left_gain)
-        right = int(amp * right_gain)
+        left = max(-32768, min(32767, int(amp * left_gain)))
+        right = max(-32768, min(32767, int(amp * right_gain)))
         struct.pack_into("<hh", samples, i * 4, left, right)
 
     return bytes(samples)
@@ -100,10 +106,12 @@ class AudioBattlePhase13:
     def __init__(self) -> None:
         self._init_pygame()
         current_mixer = pygame.mixer.get_init()
+        needs_mixer_init = not bool(current_mixer)
         if current_mixer and (current_mixer[0] != SAMPLE_RATE or current_mixer[2] != 2):
             pygame.mixer.quit()
+            needs_mixer_init = True
         try:
-            if not pygame.mixer.get_init():
+            if needs_mixer_init or not pygame.mixer.get_init():
                 pygame.mixer.init(frequency=SAMPLE_RATE, size=-16, channels=2)
         except pygame.error as exc:
             pygame.quit()
