@@ -10,6 +10,7 @@ from __future__ import annotations
 import math
 import struct
 import threading
+import time
 from collections import deque
 from dataclasses import dataclass
 
@@ -49,7 +50,7 @@ class Narrator:
                 if self._queue:
                     message = self._queue.popleft()
             if message is None:
-                pygame.time.wait(20)
+                time.sleep(0.02)
                 continue
             try:
                 self._engine.say(message)
@@ -77,7 +78,7 @@ def make_tone(tone: ToneDef, pan: float) -> pygame.mixer.Sound:
 def synthesize_tone_bytes(tone: ToneDef, pan: float, sample_rate: int = SAMPLE_RATE) -> bytes:
     left_gain, right_gain = stereo_gains(pan)
     frames = int((tone.duration_ms / 1000.0) * sample_rate)
-    samples = bytearray()
+    samples = bytearray(frames * 4)
 
     for i in range(frames):
         t = i / sample_rate
@@ -85,7 +86,7 @@ def synthesize_tone_bytes(tone: ToneDef, pan: float, sample_rate: int = SAMPLE_R
         amp = int(32767 * tone.volume * base)
         left = int(amp * left_gain)
         right = int(amp * right_gain)
-        samples.extend(struct.pack("<hh", left, right))
+        struct.pack_into("<hh", samples, i * 4, left, right)
 
     return bytes(samples)
 
@@ -93,8 +94,12 @@ def synthesize_tone_bytes(tone: ToneDef, pan: float, sample_rate: int = SAMPLE_R
 class AudioBattlePhase13:
     def __init__(self) -> None:
         self._init_pygame()
+        current_mixer = pygame.mixer.get_init()
+        if current_mixer and current_mixer != (SAMPLE_RATE, -16, 2):
+            pygame.mixer.quit()
         try:
-            pygame.mixer.init(frequency=SAMPLE_RATE, size=-16, channels=2)
+            if not pygame.mixer.get_init():
+                pygame.mixer.init(frequency=SAMPLE_RATE, size=-16, channels=2)
         except pygame.error as exc:
             pygame.quit()
             raise RuntimeError("Audio device initialization failed.") from exc
@@ -119,6 +124,7 @@ class AudioBattlePhase13:
 
     @staticmethod
     def _init_pygame() -> None:
+        pygame.mixer.pre_init(frequency=SAMPLE_RATE, size=-16, channels=2)
         if not pygame.display.get_init():
             pygame.display.init()
         if not pygame.font.get_init():
@@ -153,11 +159,13 @@ class AudioBattlePhase13:
 
     def play_enemy_cue(self, direction: str) -> None:
         self.enemy_sounds[direction].play()
-        self.narrator.say(f"敵の気配: {direction}")
+        direction_ja = "左" if direction == "left" else "右"
+        self.narrator.say(f"敵の気配: {direction_ja}")
 
     def play_dodge(self, direction: str) -> None:
         self.dodge_sounds[direction].play()
-        self.narrator.say(f"回避: {direction}")
+        direction_ja = "左" if direction == "left" else "右"
+        self.narrator.say(f"回避: {direction_ja}")
 
     def play_attack(self) -> None:
         self.attack_sound.play()
