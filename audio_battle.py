@@ -66,7 +66,7 @@ class Narrator:
             except Exception:
                 pass
         if self._thread.is_alive():
-            self._thread.join()
+            self._thread.join(timeout=1.0)
 
 
 @dataclass(frozen=True)
